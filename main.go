@@ -1,57 +1,86 @@
 package main
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 
 	"github.com/moby/moby/client"
 )
 
 func main() {
-	// Dockerへ処理を依頼するためのcontextを作る
-	ctx := context.Background()
-
-	// Docker Engineへ接続するclientを作る
+	// Docker Clientを作る
 	apiClient, err := client.New(client.FromEnv)
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer apiClient.Close()
 
-	// Docker clientを最後に閉じる
+	// POST /sessions 用handlerを登録する
+	http.HandleFunc("/sessions", handleCreateSession(apiClient))
 
-	// Docker EngineへPingする
-	pingResult, err := apiClient.Ping(ctx, client.PingOptions{})
-
-	if err != nil {
+	// :8080でHTTP Serverを起動する
+	if err := http.ListenAndServe(":8080", nil); err != nil {
 		log.Fatal(err)
 	}
+}
 
-	// Pingに成功したことを表示する
-	fmt.Println("Docker API Version:", pingResult.APIVersion)
-	fmt.Println("OS Type:", pingResult.OSType)
+// POST /sessions を処理するhandlerを作る
+func handleCreateSession(apiClient *client.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// POST以外なら拒否する
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 
-	// Docker create
-	resp, err := apiClient.ContainerCreate(
-		ctx, client.ContainerCreateOptions{
-			Image: "nginx:alpine",
-		},
-	)
-	if err != nil {
-		log.Fatal(err)
+		// HTTPリクエストのcontextを取得する
+		ctx := r.Context()
+
+		// ContainerをCreateする
+		resp, err := apiClient.ContainerCreate(
+			ctx, client.ContainerCreateOptions{
+				Image: "nginx:alpine",
+			},
+		)
+		if err != nil {
+			http.Error(w, "failed to create container", http.StatusInternalServerError)
+			return
+		}
+
+		fmt.Println("Container created:", resp.ID)
+
+		// Docker start
+		_, err = apiClient.ContainerStart(
+			ctx,
+			resp.ID,
+			client.ContainerStartOptions{},
+		)
+		if err != nil {
+			http.Error(w, "failed to start container", http.StatusInternalServerError)
+			return
+		}
+
+		fmt.Println("Container started:", resp.ID)
+
+		// Container IDをレスポンスとして返す
+		w.Header().Set("Content-Type", "application/json")
+
+		type createSessionResponse struct {
+			ContainerID string `json:"container_id"`
+			Status      string `json:"status"`
+		}
+
+		response := createSessionResponse{
+			ContainerID: resp.ID,
+			Status:      "running",
+		}
+
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			http.Error(w, "failed to encode response", http.StatusInternalServerError)
+			return
+		}
 	}
-
-	fmt.Println("Container created:", resp.ID)
-
-	// Docker start
-	_, err = apiClient.ContainerStart(
-		ctx,
-		resp.ID,
-		client.ContainerStartOptions{},
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println("Container started")
 }
