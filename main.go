@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
 )
 
@@ -18,7 +19,10 @@ func main() {
 	defer apiClient.Close()
 
 	// POST /sessions 用handlerを登録する
-	http.HandleFunc("/sessions", handleCreateSession(apiClient))
+	http.HandleFunc("POST /sessions", handleCreateSession(apiClient))
+
+	// GET /sessions/{id} 用handlerを登録する
+	http.HandleFunc("GET /sessions/{id}", handleGetSession(apiClient))
 
 	// :8080でHTTP Serverを起動する
 	if err := http.ListenAndServe(":8080", nil); err != nil {
@@ -76,6 +80,60 @@ func handleCreateSession(apiClient *client.Client) http.HandlerFunc {
 		response := createSessionResponse{
 			ContainerID: resp.ID,
 			Status:      "running",
+		}
+
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			http.Error(w, "failed to encode response", http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
+// GET /sessions/{id} を処理するhandlerを作る
+func handleGetSession(apiClient *client.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// GET以外なら拒否する
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Container IDを取得する
+		id := r.PathValue("id")
+		if id == "" {
+			http.Error(w, "session id is required", http.StatusBadRequest)
+			return
+		}
+
+		// HTTPリクエストのcontextを取得する
+		ctx := r.Context()
+
+		// ContainerをInspectする
+		container, err := apiClient.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+
+		if err != nil {
+			// Not Found判定
+			if errdefs.IsNotFound(err) {
+				http.Error(w, "session not found", http.StatusNotFound)
+				return
+			}
+
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		// Container Statusをレスポンスとして返す
+		w.Header().Set("Content-Type", "application/json")
+
+		type getSessionResponse struct {
+			ContainerID string `json:"container_id"`
+			Status      string `json:"status"`
+		}
+
+		response := getSessionResponse{
+			ContainerID: container.Container.ID,
+			Status:      string(container.Container.State.Status),
 		}
 
 		if err := json.NewEncoder(w).Encode(response); err != nil {
