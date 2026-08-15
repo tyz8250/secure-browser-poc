@@ -24,6 +24,9 @@ func main() {
 	// GET /sessions/{id} 用handlerを登録する
 	http.HandleFunc("GET /sessions/{id}", handleGetSession(apiClient))
 
+	// DELETE /sessions/{id} 用handlerを登録する
+	http.HandleFunc("DELETE /sessions/{id}", handleDeleteSession(apiClient))
+
 	// :8080でHTTP Serverを起動する
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		log.Fatal(err)
@@ -140,5 +143,52 @@ func handleGetSession(apiClient *client.Client) http.HandlerFunc {
 			http.Error(w, "failed to encode response", http.StatusInternalServerError)
 			return
 		}
+	}
+}
+
+// DELETE /sessions/{id} を処理するhandlerを作る
+func handleDeleteSession(apiClient *client.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Container IDを取得する
+		id := r.PathValue("id")
+		if id == "" {
+			http.Error(w, "session id is required", http.StatusBadRequest)
+			return
+		}
+
+		ctx := r.Context()
+
+		// ContainerをInspectする
+		container, err := apiClient.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+
+		if err != nil {
+			// Not Found判定
+			if errdefs.IsNotFound(err) {
+				http.Error(w, "session not found", http.StatusNotFound)
+				return
+			}
+
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if container.Container.State.Status == "running" {
+			// Containerを停止する
+			_, err := apiClient.ContainerStop(
+				ctx,
+				id,
+				client.ContainerStopOptions{},
+			)
+
+			if err != nil {
+				http.Error(w, "failed to stop container", http.StatusInternalServerError)
+				return
+			}
+		}
+		if _, err := apiClient.ContainerRemove(ctx, id, client.ContainerRemoveOptions{}); err != nil {
+			http.Error(w, "failed to remove container", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
