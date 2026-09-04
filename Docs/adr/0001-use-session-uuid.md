@@ -1,0 +1,3 @@
+# Session IDにContainer IDを使わない
+
+SessionはAPIが管理する論理的な単位であり、現在の実行手段であるContainerとは分離する。公開するSession IDにはUUIDを発行し、管理対象コンテナの目印として対応付けることで、将来実行手段が変わってもAPIの識別子を維持できるようにする。UUIDは認証情報ではない。
